@@ -1,26 +1,12 @@
-﻿function format() {
-    // The string containing the format items (e.g. "{0}")
-    // will and always has to be the first argument.
-    var theString = arguments[0];
-    
-    // start with the second argument (i = 1)
-    for (var i = 1; i < arguments.length; i++) {
-        // "gm" = RegEx options for Global search (more than one instance)
-        // and for Multiline search
-        var regEx = new RegExp("\\{" + (i - 1) + "\\}", "gm");
-        theString = theString.replace(regEx, arguments[i]);
-    }
-    
-    return theString;
-}
-
-function CrudApp(params) {
+﻿function CrudApp(params) {
 
     var attrs = {
         id: "table-" + Math.floor(Math.random() * 1000000),
         classList: null,
         customTableHeader: null,
         container: 'body',
+        fieldTypes: null,
+        notIncludeColumns: [],
         table: null,
         add: null,
         update: null,
@@ -43,7 +29,9 @@ function CrudApp(params) {
         var ths = '';
 
         headerNames.forEach(headerName => {
-            ths += '<th>' + headerName + '</th>';
+            if (validColumnName(headerName)){
+                ths += '<th>' + headerName + '</th>';
+            }
         });
 
         theadRow = format(theadRow, ths);
@@ -67,11 +55,15 @@ function CrudApp(params) {
                 var row = format("<tr data-index='{0}'>", i);
 
                 for (var propt in obj) {
-                    row += "<td id='" + propt + i + "'>" + obj[propt] + "</td>";
+                    if (validColumnName(propt)){
+                        var value = obj[propt] == null ? '' : obj[propt];
+                        row += "<td data-columnname = '" + propt + "' id='" + propt + i + "'>" + value + "</td>";
+                    }
                 }
 
                 row += "</tr>";
                 tableRowsString += row;
+                delete attrs.data[i].state;
             }
         }
 
@@ -79,7 +71,7 @@ function CrudApp(params) {
     };
 
     var main = function () {
-
+        
     };
 
     //Dynamic keys functions
@@ -95,7 +87,16 @@ function CrudApp(params) {
 
     main.attrs = attrs;
 
-    main.update = fetchAll;
+    main.update = function(data) {
+        data.forEach(x => {
+            attrs.data.forEach((m, i) => {
+                if (x.Id == m.Id){
+                    attrs.data[i] = x;
+                }
+            });
+        });
+        fetchAll();
+    };
 
     main.cancel = fetchAll;
 
@@ -105,6 +106,63 @@ function CrudApp(params) {
         return main;
     };
     
+    main.inlineEditRow = function () {
+        
+        var rows = attrs.table.getElementsByTagName('tr');
+        for (var i = 0; i < rows.length; i++) {
+            var tds = rows[i].getElementsByTagName('td');
+            var entityIndex = +rows[i].getAttribute("data-index"); // get item's index
+            for (var j = 0; j < tds.length; j++) {
+                var columnName = tds[j].getAttribute('data-columnname');
+                var text = tds[j].innerText;
+                var id = tds[j].getAttribute("id");
+                var filedType = attrs.fieldTypes[j];
+                if (filedType != null){
+                    var childElement = getChildElement(filedType, text, columnName);
+
+                    childElement.setAttribute("data-index", entityIndex);
+                    childElement.setAttribute("data-columnname", columnName);
+
+                    tds[j].innerHTML = "";
+                    tds[j].appendChild(childElement);
+
+                    if (filedType.init) {
+                        filedType.init("#" + id + " .update-control");
+                    }
+                }
+            }
+        }
+
+        // add change event listener
+        document.addEventListener('change',function(e){
+            if(e.target && e.target.classList.contains('update-control')){
+                var entityIndex = e.target.getAttribute("data-index");
+                var columnName = e.target.getAttribute("data-columnname");
+                var notIncludedColumnName = attrs.notIncludeColumns.filter(x => x.refValue == columnName);
+
+                if (notIncludedColumnName.length == 0 || e.target.tagName == 'SELECT'){
+                    var chosen = event.target.value;
+                    if (notIncludedColumnName.length > 0) {
+                        attrs.data[entityIndex][notIncludedColumnName[0].value] = chosen;
+                        attrs.data[entityIndex].state = "modified";
+                    }
+                    attrs.data[entityIndex][columnName] = chosen;
+                    attrs.data[entityIndex].state = "modified";
+                }
+                else {
+                    if (event.target.hasAttribute("data-id")){
+                        var chosen = event.target.getAttribute("data-id");
+                        
+                        if (notIncludedColumnName.length > 0){
+                            attrs.data[entityIndex][notIncludedColumnName[0].value] = chosen;
+                            attrs.data[entityIndex].state = "modified";
+                        }
+                    }
+                }
+            }
+        })
+    };
+
     main.save = function () {
         var addedData = [];
         var newRows = attrs.table.getElementsByClassName('newRows');
@@ -124,11 +182,20 @@ function CrudApp(params) {
         return addedData;
     };
 
+    main.saveEdited = function () {
+        var modifiedDataArray = attrs.data.filter(x => x.state === "modified");
+        modifiedDataArray.forEach(x => {
+            delete x.state;
+        });
+        return modifiedDataArray;
+    };
+
     main.addRow = function () {
         var row = document.createElement("tr");
         row.setAttribute("class", "newRows");
         // append row to table
         Object.keys(attrs.data[0]).forEach(function (key) {
+            
             var td = document.createElement("td");
             td.setAttribute("id", key + attrs.data.length);
             if (key.toLowerCase() != "id") {
@@ -138,11 +205,12 @@ function CrudApp(params) {
                 input.setAttribute("data-key", key);
                 td.appendChild(input);
             }
-            else {
+            else{
                 td.innerHTML = "-";
             }
-
+                
             row.appendChild(td);
+            
         });
         var tbody = attrs.table.querySelector('tbody');
         tbody.insertBefore(row, tbody.firstChild);
@@ -197,6 +265,43 @@ function CrudApp(params) {
         fetchAll();
         return main;
     };
+
+    // ############### private functions ##############
+    var getChildElement = function (obj, value) {
+         var el = document.createElement(obj.element);
+         el.setAttribute("class", "form-control update-control");
+         if (Array.isArray(obj.dropDown)) {
+            obj.dropDown.forEach(d => {
+                var option = document.createElement("option");
+                option.innerText = d.text;
+                option.setAttribute("value", d.value);
+                el.appendChild(option);
+            });
+         }
+
+         Object.keys(obj).forEach(key => {
+            if (key === 'element' || key === 'dropDown') {
+                
+            }
+            else{
+                if (key === 'value') {
+                    el.setAttribute(key, value);
+                }
+                else {
+                    el.setAttribute(key, obj[key]);
+                }
+            }
+         });
+         return el;
+    };
+
+    var validColumnName = function(columnName) {
+        var filtered = attrs.notIncludeColumns.filter(x => x.value == columnName);
+        if (filtered.length > 0){
+            return false;
+        }
+        return true;
+    }
 
     return main;
 }
